@@ -33,8 +33,19 @@ Version 0.1.1 uses a dedicated exported launcher activity, so Android exposes th
 - CMF Watch Pro 2 with the patched firmware and App Loader
 - The **Music Controller** watch app installed through fmc.tools
 - Bluetooth permission granted
+- Restricted settings allowed first on Android 13 and newer when installing the sideloaded APK
 - Notification-listener access enabled for Music Companion
 - Foreground notifications allowed (recommended on Android 13 and newer)
+
+### Enable notification access on Android 13+ / HyperOS
+
+Because this release is a sideloaded APK, Android may restrict notification-listener access. Allow restricted settings **before** opening notification settings:
+
+1. Open **Settings → Apps → Manage apps → Music Companion → App info**.
+2. Tap **⋮ → Allow restricted settings** and confirm.
+3. Now open **Settings → Notifications → Notification access**. HyperOS may label this **Device & app notifications**.
+4. Enable **Music Companion**. If the toggle was initially greyed out, tapping it once and acknowledging the system warning can make the **Allow restricted settings** menu appear in App info.
+5. Return to Music Companion, allow foreground notifications, and enable **Watch bridge**.
 
 Open the app, grant the listed permissions, and enable **Watch bridge**. The screen also shows the current track and provides local playback and music-volume controls.
 
