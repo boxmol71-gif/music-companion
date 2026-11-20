@@ -30,6 +30,7 @@ import tools.fmc.musiccompanion.wire.MUSIC_PACKAGE_NAME
 import tools.fmc.musiccompanion.wire.MusicOperation
 import tools.fmc.musiccompanion.wire.RpcError
 import tools.fmc.musiccompanion.wire.RpcStatus
+import tools.fmc.musiccompanion.wire.WireError
 import tools.fmc.musiccompanion.wire.bytes
 import tools.fmc.musiccompanion.wire.installedPackageName
 import tools.fmc.musiccompanion.wire.monotonicMs
@@ -122,8 +123,14 @@ class MusicBridgeService : Service() {
         store[account]?.let { cached ->
             try {
                 return KSession.open(bleLink, cached).first
+            } catch (timeout: WireError.Timeout) {
+                // A timed-out operation can still have a GATT callback in flight. Invalidate this connection so
+                // that callback cannot satisfy a later operation; the outer loop reconnects with a fresh GATT.
+                bleLink.invalidate()
+                throw timeout
             } catch (timeout: TimeoutCancellationException) {
-                // A cached key or a missed GATT callback timed out; retry from a clean link.
+                bleLink.invalidate()
+                throw timeout
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (_: Exception) {

@@ -15,7 +15,9 @@ import android.content.Context
 import android.os.Build
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -42,6 +44,7 @@ class BleLink(private val context: Context) : Link {
     private val characteristics = mutableMapOf<String, BluetoothGattCharacteristic>()
     private val handlers = CopyOnWriteArrayList<(String, ByteArray) -> Unit>()
     private val operations = Mutex()
+    private val connection = ConnectionEpoch<BluetoothGatt>()
 
     private class Step(val operation: Operation, val done: CompletableDeferred<Unit> = CompletableDeferred())
     private enum class Operation { CONNECT, MTU, SERVICES, DESCRIPTOR, WRITE }
@@ -77,7 +80,14 @@ class BleLink(private val context: Context) : Link {
         watchId = identityOf(device)
         dropped = false
         gattStep(Operation.CONNECT) {
-            gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+            val connected = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+            if (connected == null) {
+                false
+            } else {
+                connection.activate(connected)
+                gatt = connected
+                true
+            }
         }
         val gatt = gatt ?: throw BleError.noWatch
         gattStep(Operation.MTU) { gatt.requestMtu(247) }
@@ -97,15 +107,24 @@ class BleLink(private val context: Context) : Link {
         }
     }
 
-    fun disconnect() {
+    /** Invalidates the current connection so a late GATT callback cannot complete a later operation. */
+    fun invalidate() {
+        val current = gatt
+        connection.invalidate(current)
+        gatt = null
+        dropped = true
+        step?.let {
+            this.step = null
+            it.done.completeExceptionally(BleError.dropped)
+        }
         disconnected.complete(Unit)
-        gatt?.run {
+        current?.run {
             disconnect()
             close()
         }
-        gatt = null
-        step?.done?.completeExceptionally(BleError.dropped)
     }
+
+    fun disconnect() = invalidate()
 
     override fun onNotify(handler: (String, ByteArray) -> Unit) {
         handlers += handler
@@ -153,8 +172,18 @@ class BleLink(private val context: Context) : Link {
     private suspend fun stepLocked(operation: Operation, start: () -> Any?) {
         val step = Step(operation)
         this.step = step
-        if (start() == false) throw BleError("The watch did not accept the request.")
-        withTimeout(STEP_TIMEOUT_MS) { step.done.await() }
+        try {
+            if (start() == false) throw BleError("The watch did not accept the request.")
+            withTimeout(STEP_TIMEOUT_MS) { step.done.await() }
+        } catch (timeout: TimeoutCancellationException) {
+            invalidate()
+            throw timeout
+        } catch (cancellation: CancellationException) {
+            invalidate()
+            throw cancellation
+        } finally {
+            if (this.step === step) this.step = null
+        }
     }
 
     private suspend fun scan(approvedId: String?): BluetoothDevice? {
@@ -178,7 +207,8 @@ class BleLink(private val context: Context) : Link {
         }
     }
 
-    private fun finish(operation: Operation, status: Int) {
+    private fun finish(operation: Operation, status: Int, source: BluetoothGatt) {
+        if (!connection.accepts(source)) return
         val step = step?.takeIf { it.operation == operation } ?: return
         if (status == BluetoothGatt.GATT_SUCCESS) {
             step.done.complete(Unit)
@@ -194,38 +224,39 @@ class BleLink(private val context: Context) : Link {
 
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, state: Int) {
+            if (!connection.accepts(gatt)) return
             when (state) {
-                BluetoothProfile.STATE_CONNECTED -> finish(Operation.CONNECT, BluetoothGatt.GATT_SUCCESS)
-                BluetoothProfile.STATE_DISCONNECTED -> {
-                    dropped = true
-                    disconnected.complete(Unit)
-                    step?.done?.completeExceptionally(BleError.dropped)
-                }
+                BluetoothProfile.STATE_CONNECTED -> finish(Operation.CONNECT, BluetoothGatt.GATT_SUCCESS, gatt)
+                BluetoothProfile.STATE_DISCONNECTED -> invalidate()
             }
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            if (!connection.accepts(gatt)) return
             if (status == BluetoothGatt.GATT_SUCCESS) this@BleLink.mtu = mtu
-            finish(Operation.MTU, BluetoothGatt.GATT_SUCCESS)
+            finish(Operation.MTU, status, gatt)
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) =
-            finish(Operation.SERVICES, status)
+            finish(Operation.SERVICES, status, gatt)
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) =
-            finish(Operation.DESCRIPTOR, status)
+            finish(Operation.DESCRIPTOR, status, gatt)
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) =
-            finish(Operation.WRITE, status)
+            finish(Operation.WRITE, status, gatt)
 
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
-        ) = dispatch(characteristic, value)
+        ) {
+            if (connection.accepts(gatt)) dispatch(characteristic, value)
+        }
 
         @Deprecated("Android 12 and older")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            if (!connection.accepts(gatt)) return
             @Suppress("DEPRECATION")
             if (Build.VERSION.SDK_INT < 33) dispatch(characteristic, characteristic.value.copyOf())
         }

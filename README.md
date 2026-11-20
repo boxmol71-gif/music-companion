@@ -19,11 +19,13 @@ Notification-listener access gives Android's notification service permission to 
 
 ## Install
 
-Download the current APK from the [GitHub releases page](https://github.com/boxmol71-gif/music-companion/releases/latest). The `0.1.0` APK is debug-signed for sideloading; verify its SHA-256 before installation:
+Download the current APK from the [GitHub releases page](https://github.com/boxmol71-gif/music-companion/releases/latest). The `0.1.1` APK is debug-signed for sideloading; verify its SHA-256 before installation:
 
 ```text
-8ce442e4f4be775be493a07fae8b670ae04562049fdfa75719b501d2a0058853  MusicCompanion-0.1.0-debug.apk
+26132f4a85e05d896e00f8b7f6c4e10472808ca156c927887fe3768b59d6a59a  MusicCompanion-0.1.1-debug.apk
 ```
+
+Version 0.1.1 uses a dedicated exported launcher activity, so Android exposes the app in the launcher and the package installer can open it normally. It also invalidates the BLE connection after a timed-out operation so a late GATT callback cannot complete a later request.
 
 ## Requirements
 
