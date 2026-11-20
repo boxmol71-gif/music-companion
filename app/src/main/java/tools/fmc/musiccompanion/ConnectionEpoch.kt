@@ -11,14 +11,17 @@ internal class ConnectionEpoch<T> {
     private var generation = 0L
     private var current: T? = null
 
+    @Synchronized
     fun activate(value: T): Long {
         generation += 1
         current = value
         return generation
     }
 
+    @Synchronized
     fun accepts(candidate: T): Boolean = current === candidate
 
+    @Synchronized
     fun invalidate(candidate: T? = null) {
         if (candidate == null || current === candidate) {
             current = null
