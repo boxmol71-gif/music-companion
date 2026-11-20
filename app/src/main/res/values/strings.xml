@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Music Companion</string>
+    <string name="bridge_channel_name">Watch bridge</string>
+</resources>
