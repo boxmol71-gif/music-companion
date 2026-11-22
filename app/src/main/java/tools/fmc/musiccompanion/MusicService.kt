@@ -15,10 +15,14 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Build
 import android.service.notification.StatusBarNotification
+import tools.fmc.musiccompanion.wire.ArtworkTransfer
 import tools.fmc.musiccompanion.wire.MusicCommand
 import tools.fmc.musiccompanion.wire.RpcError
 import tools.fmc.musiccompanion.wire.RpcStatus
+import tools.fmc.musiccompanion.wire.artworkRgb332Payload
+import tools.fmc.musiccompanion.wire.artworkTransfer
 import tools.fmc.musiccompanion.wire.musicSnapshotRecords
+import tools.fmc.musiccompanion.wire.musicTrackRecords
 
 /** The current track as shown by the phone UI. */
 data class MusicDescription(
@@ -33,8 +37,9 @@ data class MusicDescription(
 )
 
 /**
- * Reads Android's active media session and the matching media notification for the local phone UI. Artwork is taken
- * only from that notification's large icon or EXTRA_PICTURE and never leaves the phone; MediaMetadata artwork is not used.
+ * Reads Android's active media session and the matching media notification. Artwork is taken only from that
+ * notification's large icon or EXTRA_PICTURE; MediaMetadata artwork is not used. The watch receives the displayed title
+ * and artist plus a normalized low-resolution copy of this image; albums and notification text remain on the phone.
  */
 object MusicService {
     private const val MEDIA_STYLE = "android.app.Notification.MediaStyle"
@@ -74,6 +79,43 @@ object MusicService {
             volume = audio?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0,
             maxVolume = audio?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 0,
         )
+    }
+
+    /** The current title and artist shown by the phone UI. */
+    fun track(context: Context): List<ByteArray> {
+        requireListenerAccess(context)
+        // Track text is metadata-only. Do not decode the notification artwork on this fast path.
+        val active = activeMedia(context)
+        return musicTrackRecords(
+            title(active.controller, active.metadataNotification),
+            artist(active.controller, active.metadataNotification),
+        )
+    }
+
+    /**
+     * Returns the watch-facing artwork records for the notification that exactly matches the active controller.
+     * An empty list means the requested generation is already current; no matching image is `UNAVAILABLE`.
+     */
+    fun artwork(context: Context, nonce: Long, knownGeneration: ULong): List<ByteArray> {
+        requireListenerAccess(context)
+        val notification = activeMedia(context).artworkNotification
+            ?: throw RpcError(RpcStatus.UNAVAILABLE)
+        val bitmap = artworkBitmap(context, notification)
+            ?: throw RpcError(RpcStatus.UNAVAILABLE)
+        val readable = if (bitmap.config == Bitmap.Config.HARDWARE) {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: throw RpcError(RpcStatus.UNAVAILABLE)
+        } else {
+            bitmap
+        }
+        if (readable.width <= 0 || readable.height <= 0) throw RpcError(RpcStatus.UNAVAILABLE)
+        val pixels = IntArray(readable.width * readable.height)
+        readable.getPixels(pixels, 0, readable.width, 0, 0, readable.width, readable.height)
+        val payload = artworkRgb332Payload(pixels, readable.width, readable.height)
+        return when (val transfer = artworkTransfer(payload, knownGeneration, nonce)) {
+            ArtworkTransfer.Unchanged -> emptyList()
+            ArtworkTransfer.Unavailable -> throw RpcError(RpcStatus.UNAVAILABLE)
+            is ArtworkTransfer.Available -> listOf(transfer.manifest) + transfer.chunks
+        }
     }
 
     /** A playback or phone music-volume command. */
@@ -198,8 +240,7 @@ object MusicService {
         val albumArtist = metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST).orEmpty()
         if (albumArtist.isNotEmpty()) return albumArtist
         notification ?: return ""
-        val subText = extraText(notification, Notification.EXTRA_SUB_TEXT)
-        return subText.ifEmpty { extraText(notification, Notification.EXTRA_TEXT) }
+        return extraText(notification, Notification.EXTRA_SUB_TEXT)
     }
 
     private fun extraText(notification: StatusBarNotification, key: String): String =

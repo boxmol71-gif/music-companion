@@ -233,7 +233,7 @@ private fun MusicScreen(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "A private bridge from this phone's media session to Music Controller on the watch.",
+                text = "A bridge from this phone's media session to Music Controller on the watch.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -267,8 +267,11 @@ private fun MusicScreen(
                 },
             )
             Text(
-                text = "Track details and artwork stay on this phone. The watch receives only playback state, music " +
-                    "volume, and control results—never a title, artist, album, notification text, or artwork.",
+                text = "The watch receives the current title, artist, a low-resolution copy of the matching " +
+                    "notification artwork, playback state, and music volume. Album and notification text stay on " +
+                    "this phone. The watch's Bluetooth channel is not private: nearby clients that know the watch " +
+                    "pairing key can observe this transferred information and inject messages into the watch-facing " +
+                    "channel.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

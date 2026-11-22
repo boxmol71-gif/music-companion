@@ -7,8 +7,9 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
 /**
- * Gives the app access to active media sessions and matching media notifications for local phone UI use. Notification
- * data is read in memory only, is never persisted, and is never included in a watch reply.
+ * Gives the app access to active media sessions and matching media notifications. Notification data is read in memory
+ * only and is never persisted. The matching title, artist, and artwork thumbnail may be included in the dedicated
+ * Music Controller watch reply; notification text and album data are not.
  */
 enum class ListenerAccess {
     GRANTED,

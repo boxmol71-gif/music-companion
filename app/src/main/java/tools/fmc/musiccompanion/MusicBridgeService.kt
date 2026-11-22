@@ -40,7 +40,8 @@ import tools.fmc.musiccompanion.wire.replies
 
 /**
  * Holds the standalone BLE link and answers the watch's dedicated M1 RPC one request at a time. Watch replies contain
- * only non-personal playback state, volume, and control status; no track-identifying data is logged or transmitted.
+ * playback state, volume, control status, the displayed title and artist, and optional low-resolution notification
+ * artwork. Albums and notification text are never included or logged.
  */
 class MusicBridgeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -160,10 +161,11 @@ class MusicBridgeService : Service() {
             if (slot !in 0..7) continue
             val request = parseMusicRequest(message) ?: continue
             val operation = musicOperation(request)
-            val responseBudget = if (operation is MusicOperation.Command) {
-                COMMAND_RESPONSE_BUDGET_MS
-            } else {
-                SNAPSHOT_RESPONSE_BUDGET_MS
+            val responseBudget = when (operation) {
+                is MusicOperation.Command -> COMMAND_RESPONSE_BUDGET_MS
+                is MusicOperation.Artwork -> ARTWORK_RESPONSE_BUDGET_MS
+                is MusicOperation.Track -> TRACK_RESPONSE_BUDGET_MS
+                else -> SNAPSHOT_RESPONSE_BUDGET_MS
             }
             val deadline = monotonicMs() + responseBudget
             val packageName = packageNames[slot]
@@ -176,8 +178,15 @@ class MusicBridgeService : Service() {
             if (packageName != MUSIC_PACKAGE_NAME) continue
             val response = respond(request)
             for (reply in response) {
-                val remaining = (deadline - monotonicMs()).coerceAtLeast(1)
-                session.send(reply, slot, remaining)
+                val remaining = deadline - monotonicMs()
+                if (remaining <= 0L) break
+                try {
+                    session.send(reply, slot, remaining)
+                } catch (timeout: WireError.Timeout) {
+                    // A response deadline expiring must not tear down the BLE bridge. The watch
+                    // will retry, and the next request can still use this healthy session.
+                    break
+                }
             }
         }
     }
@@ -202,6 +211,24 @@ class MusicBridgeService : Service() {
             is MusicOperation.Command -> try {
                 MusicService.command(this, byteArrayOf(operation.command.toByte(), operation.value.toByte()))
                 replies(request.id, RpcStatus.OK)
+            } catch (error: RpcError) {
+                replies(request.id, error.status)
+            } catch (_: SecurityException) {
+                replies(request.id, RpcStatus.DENIED)
+            } catch (_: Exception) {
+                replies(request.id, RpcStatus.UNAVAILABLE)
+            }
+            is MusicOperation.Artwork -> try {
+                replies(request.id, RpcStatus.OK, MusicService.artwork(this, operation.nonce, operation.knownGeneration))
+            } catch (error: RpcError) {
+                replies(request.id, error.status)
+            } catch (_: SecurityException) {
+                replies(request.id, RpcStatus.DENIED)
+            } catch (_: Exception) {
+                replies(request.id, RpcStatus.UNAVAILABLE)
+            }
+            is MusicOperation.Track -> try {
+                replies(request.id, RpcStatus.OK, MusicService.track(this))
             } catch (error: RpcError) {
                 replies(request.id, error.status)
             } catch (_: SecurityException) {
@@ -252,6 +279,8 @@ class MusicBridgeService : Service() {
         private const val PACKAGE_LOOKUP_TIMEOUT_MS = 2_000L
         private const val COMMAND_RESPONSE_BUDGET_MS = 6_500L
         private const val SNAPSHOT_RESPONSE_BUDGET_MS = 8_500L
+        private const val TRACK_RESPONSE_BUDGET_MS = 8_000L
+        private const val ARTWORK_RESPONSE_BUDGET_MS = 15_000L
         private const val APPROVED_WATCH = "approved-watch"
 
         fun start(context: Context) {
